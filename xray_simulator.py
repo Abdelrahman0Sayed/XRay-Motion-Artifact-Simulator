@@ -229,9 +229,7 @@ def simulate_acquisition(volume, p):
 
         # ── displacement  d(t)  ──────────────────────────────────
         if   mtype == "linear":
-            # Center linear motion over the exposure window so velocity
-            # controls blur width without introducing a large net shift.
-            d_cm = v * (t - 0.5 * T)
+            d_cm = v * t
         elif mtype == "breathing":
             d_cm = A * np.sin(2 * np.pi * f * t)
         elif mtype == "cardiac":
@@ -533,7 +531,7 @@ class Projection2DCanvas(FigureCanvas):
 
     def show_results(self, static, motion, mitigated, params):
         self.fig.clf()
-        cmap = "gray_r"
+        cmap = "gray"
         titles = [
             "① Static  (no motion)",
             "② Motion Artifact\n" + _motion_label(params),
