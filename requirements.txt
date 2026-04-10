@@ -1,0 +1,7 @@
+# X-Ray Motion Artifact Simulator — SBE 4220
+# Python 3.8+  requirements
+
+PyQt5>=5.15
+matplotlib>=3.5
+numpy>=1.21
+scipy>=1.7
