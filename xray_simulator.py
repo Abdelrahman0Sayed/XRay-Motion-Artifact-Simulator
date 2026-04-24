@@ -511,7 +511,20 @@ class Projection2DCanvas(FigureCanvas):
         self.setParent(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.fig.patch.set_facecolor(self.BG)
+        self.film_mode = True
+        self.show_centerlines = False
+        self._last_results = None
         self._placeholder()
+
+    def set_film_mode(self, enabled):
+        self.film_mode = bool(enabled)
+        if self._last_results is not None:
+            self.show_results(*self._last_results)
+
+    def set_centerlines_enabled(self, enabled):
+        self.show_centerlines = bool(enabled)
+        if self._last_results is not None:
+            self.show_results(*self._last_results)
 
     def _placeholder(self):
         self.fig.clf()
@@ -530,6 +543,7 @@ class Projection2DCanvas(FigureCanvas):
         self.draw_idle()
 
     def show_results(self, static, motion, mitigated, params):
+        self._last_results = (static, motion, mitigated, params)
         self.fig.clf()
         cmap = "gray"
         titles = [
@@ -543,9 +557,18 @@ class Projection2DCanvas(FigureCanvas):
         for k, (img, ttl, col) in enumerate(zip(images, titles, colors)):
             ax = self.fig.add_subplot(1, 3, k + 1)
             ax.set_facecolor("#000008")
-            ax.imshow(img.T, cmap=cmap, vmin=0, vmax=1,
+            display_img = (1.0 - img) if self.film_mode else img
+            ax.imshow(display_img.T, cmap=cmap, vmin=0, vmax=1,
                       aspect="auto", interpolation="bilinear",
                       origin="lower")
+            if self.show_centerlines:
+                h, w = display_img.T.shape
+                x_mid = (w - 1) / 2.0
+                y_mid = (h - 1) / 2.0
+                ax.axvline(x_mid, color="#ffde59", linestyle="--",
+                           linewidth=0.8, alpha=0.9)
+                ax.axhline(y_mid, color="#ffde59", linestyle="--",
+                           linewidth=0.8, alpha=0.9)
             ax.set_title(ttl, color=col, fontsize=7.5,
                          pad=5, fontweight="bold")
             ax.axis("off")
@@ -557,7 +580,6 @@ class Projection2DCanvas(FigureCanvas):
 
         self.fig.suptitle(
             f"Exposure {params['exposure_time']:.2f} s  ·  "
-            f"{params['noise_type']} noise  ·  "
             f"N₀ = {params['n_photons']:,}",
             color="#5566aa", fontsize=7.5, y=0.01
         )
@@ -672,6 +694,11 @@ QComboBox, QSpinBox, QDoubleSpinBox {
     selection-background-color: #2a3560;
 }
 QComboBox:hover, QSpinBox:hover { border-color: #4466aa; }
+QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
+    background: #0f1020;
+    border: 1px solid #1f2744;
+    color: #566084;
+}
 QComboBox::drop-down { border: none; width: 20px; }
 QComboBox::down-arrow { width: 10px; height: 10px; }
 QComboBox QAbstractItemView {
@@ -697,6 +724,7 @@ QSlider::sub-page:horizontal {
         stop:0 #2244aa, stop:1 #4466ee);
     border-radius: 2px;
 }
+QSlider:disabled::groove:horizontal { background: #14182a; }
 QSlider:disabled::handle { background: #333344; border-color: #333344; }
 QSlider:disabled::sub-page { background: #1e2030; }
 QPushButton#shoot_btn {
@@ -726,7 +754,24 @@ QPushButton#shoot_btn:disabled {
 }
 QLabel { color: #c8cce8; }
 QLabel#val_lbl { color: #5599ff; font-weight: 700; font-size: 11px; }
+QLabel#val_lbl:disabled { color: #4f5b82; }
 QLabel#header  { color: #7799dd; font-size: 11px; font-weight: 600; }
+QLabel#disabled_hint { color: #6e7aa3; font-size: 10px; font-style: italic; }
+QPushButton#toggle_btn {
+    background: #182441;
+    border: 1px solid #30508a;
+    border-radius: 6px;
+    color: #a9c4ff;
+    font-size: 10px;
+    padding: 4px 8px;
+    min-height: 22px;
+}
+QPushButton#toggle_btn:checked {
+    background: #254f95;
+    border-color: #4b8dff;
+    color: #eaf2ff;
+}
+QPushButton#toggle_btn:hover { border-color: #5f9fff; }
 QProgressBar {
     border: 1px solid #1e2a4a;
     border-radius: 4px;
@@ -827,8 +872,8 @@ class MainWindow(QMainWindow):
         ctrl_lay.addWidget(self._grp_target())
         ctrl_lay.addWidget(self._grp_xray())
         ctrl_lay.addWidget(self._grp_motion())
-        ctrl_lay.addWidget(self._grp_noise())
         ctrl_lay.addWidget(self._grp_mitigation())
+        ctrl_lay.addWidget(self._grp_view())
 
         self.progress = QProgressBar()
         self.progress.setVisible(False)
@@ -907,6 +952,10 @@ class MainWindow(QMainWindow):
 
         lb = QLabel(label)
         lb.setFixedWidth(88)
+        base_label = label.rstrip()
+        if not base_label.endswith(":"):
+            base_label += ":"
+        lb.setProperty("base_text", base_label)
         row.addWidget(lb)
 
         sl = QSlider(Qt.Horizontal)
@@ -927,6 +976,7 @@ class MainWindow(QMainWindow):
         row.addWidget(val_lb)
 
         setattr(self, f"_sl_{attr}", sl)
+        setattr(self, f"_lb_{attr}", lb)
         return w
 
     def _grp_xray(self):
@@ -984,16 +1034,11 @@ class MainWindow(QMainWindow):
         row2.addWidget(self.sb_steps)
         lay.addLayout(row2)
 
-        return g
+        self.lbl_motion_hint = QLabel("")
+        self.lbl_motion_hint.setObjectName("disabled_hint")
+        self.lbl_motion_hint.setWordWrap(True)
+        lay.addWidget(self.lbl_motion_hint)
 
-    def _grp_noise(self):
-        g = QGroupBox("📡  NOISE  MODEL")
-        lay = QHBoxLayout(g)
-        lay.addWidget(QLabel("Noise Type:"))
-        self.cb_noise = QComboBox()
-        self.cb_noise.addItems(["None", "Poisson", "Gaussian", "Combined"])
-        self.cb_noise.setCurrentText("Poisson")
-        lay.addWidget(self.cb_noise)
         return g
 
     def _grp_mitigation(self):
@@ -1013,6 +1058,27 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.cb_mitig)
         return g
 
+    def _grp_view(self):
+        g = QGroupBox("🖼️  RESULT  VIEW")
+        lay = QVBoxLayout(g)
+        lay.setSpacing(5)
+
+        self.btn_film_mode = QPushButton("Film Contrast (Absorption Bright)")
+        self.btn_film_mode.setObjectName("toggle_btn")
+        self.btn_film_mode.setCheckable(True)
+        self.btn_film_mode.setChecked(True)
+        self.btn_film_mode.toggled.connect(self._on_view_option_changed)
+        lay.addWidget(self.btn_film_mode)
+
+        self.btn_centerlines = QPushButton("Show Centerline Axes")
+        self.btn_centerlines.setObjectName("toggle_btn")
+        self.btn_centerlines.setCheckable(True)
+        self.btn_centerlines.setChecked(False)
+        self.btn_centerlines.toggled.connect(self._on_view_option_changed)
+        lay.addWidget(self.btn_centerlines)
+
+        return g
+
     # ── Slots ─────────────────────────────────────────────────────
 
     def _on_motion_type_changed(self, mtype):
@@ -1020,14 +1086,32 @@ class MainWindow(QMainWindow):
         sin = mtype in ("breathing", "cardiac")
         none_m = mtype == "none"
 
-        for sl in self._w_vel.findChildren(QSlider):
-            sl.setEnabled(lin)
-        for sl in self._w_amp.findChildren(QSlider):
-            sl.setEnabled(sin)
-        for sl in self._w_freq.findChildren(QSlider):
-            sl.setEnabled(sin)
+        self._set_slider_row_enabled(self._w_vel, self._lb__vel_val, lin)
+        self._set_slider_row_enabled(self._w_amp, self._lb__amp_val, sin)
+        self._set_slider_row_enabled(self._w_freq, self._lb__freq_val, sin)
 
+        self.cb_maxis.setEnabled(lin)
+        self.cb_maxis.setToolTip("" if lin else "Motion axis is only used in linear mode")
         self.sb_steps.setEnabled(not none_m)
+
+        if none_m:
+            self.lbl_motion_hint.setText("Motion controls are disabled in none mode.")
+        elif lin:
+            self.lbl_motion_hint.setText("Amplitude/Frequency are disabled in linear mode.")
+        else:
+            self.lbl_motion_hint.setText("Velocity and direction are disabled in breathing/cardiac.")
+
+    def _set_slider_row_enabled(self, row_widget, label_widget, enabled):
+        row_widget.setEnabled(enabled)
+        row_widget.setToolTip("" if enabled else "Disabled for selected motion type")
+        base = label_widget.property("base_text") or label_widget.text()
+        label_widget.setText(base if enabled else f"{base} (disabled)")
+
+    def _on_view_option_changed(self):
+        self.canvas2d.set_film_mode(self.btn_film_mode.isChecked())
+        self.canvas2d.set_centerlines_enabled(self.btn_centerlines.isChecked())
+        if getattr(self.canvas2d, "figure", None) and self.canvas2d.figure.axes:
+            self.canvas2d.draw_idle()
 
     def _refresh_tube(self):
         if hasattr(self, "canvas3d"):
@@ -1038,6 +1122,8 @@ class MainWindow(QMainWindow):
     def _collect_params(self):
         mtype  = self.cb_motion.currentText()
         maxis  = 0 if "X" in self.cb_maxis.currentText() else 2
+        if mtype != "linear":
+            maxis = 2
         return {
             "body_part"    : self.cb_part.currentText(),
             "proj_axis"    : PROJ_AXES[self.cb_proj.currentText()],
@@ -1049,7 +1135,7 @@ class MainWindow(QMainWindow):
             "frequency"    : self._freq_val,
             "motion_axis"  : maxis,
             "n_steps"      : self.sb_steps.value(),
-            "noise_type"   : self.cb_noise.currentText(),
+            "noise_type"   : "None",
             "mitigation"   : self.cb_mitig.currentText(),
         }
 
@@ -1064,7 +1150,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Simulating … {params['motion_type']} motion | "
             f"{params['n_steps']} integration steps | "
-            f"{params['noise_type']} noise")
+            "noise disabled")
 
         self._sim_thread = SimThread(self.phantom, params)
         self._sim_thread.done.connect(self._on_sim_done)
@@ -1073,6 +1159,7 @@ class MainWindow(QMainWindow):
         self._sim_thread.start()
 
     def _on_sim_done(self, static, motion, mitigated, p):
+        self._on_view_option_changed()
         self.canvas2d.show_results(static, motion, mitigated, p)
 
         snr_m = p.get("snr_motion",    float("nan"))
