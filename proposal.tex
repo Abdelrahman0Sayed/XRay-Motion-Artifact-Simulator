@@ -1,0 +1,95 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{hyperref}
+
+\geometry{
+    a4paper,
+    total={170mm,257mm},
+    left=20mm,
+    top=20mm,
+}
+
+\title{\textbf{Project Proposal: X-Ray Motion Artifact Simulator}}
+\author{Abdelrahman Sayed}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Context / Background}
+In the field of medical imaging technology, patient motion during X-ray acquisition remains a significant challenge. Motion artifacts degrade image quality, obscure vital anatomical details, and can lead to misdiagnoses or the need for repeated exposures, which increases patient radiation dose. Understanding the mechanics of these artifacts and how to mitigate them is a critical component of systems and biomedical engineering curricula. Currently, there is a need for accessible, software-based educational tools that allow for the safe, interactive exploration of these imaging dynamics without the need for physical X-ray machinery.
+
+\subsection{User Story}
+As a systems and biomedical engineering student at Cairo University, I want an interactive, educational simulation tool so that I can visually and quantitatively analyze the effects of patient motion during X-ray acquisitions and evaluate different post-processing mitigation strategies.
+
+\section{Purpose}
+The primary purpose of this project is to develop an educational simulator that accurately models the physical and mathematical processes of X-ray acquisition. This tool is designed to demonstrate how patient motion translates into image artifacts and to provide a platform for evaluating various noise models and digital restoration techniques.
+
+\section{Requirements}
+To achieve the project goals, the simulator must fulfill the following functional and technical requirements:
+\begin{itemize}
+    \item \textbf{Core Logic:} Developed in robust programming languages suited for matrix operations and UI development, such as Python or C/C++.
+    \item \textbf{Phantom Generation:} Ability to generate a 3D numerical human phantom using overlapping axis-aligned ellipsoids with realistic linear attenuation coefficients.
+    \item \textbf{Configuration Interface:} A graphical user interface (GUI) allowing configuration of target areas (Chest, Head), viewing directions (AP/PA/Lateral), motion parameters, exposure settings, noise models, and mitigation techniques.
+    \item \textbf{Physics Engine:} Accurate modeling of X-ray projection using the Beer-Lambert law and temporal integration to simulate motion blur.
+    \item \textbf{Noise Modeling:} Implementation of quantum (Poisson), electronic (Gaussian), and combined noise profiles.
+    \item \textbf{Post-Processing:} Inclusion of image restoration algorithms, specifically Unsharp Masking and Richardson-Lucy (RL) Deconvolution.
+    \item \textbf{Quantitative Metrics:} Real-time calculation and display of Signal-to-Noise Ratio (SNR) and Peak Signal-to-Noise Ratio (PSNR).
+\end{itemize}
+
+\section{Implementation}
+
+\subsection{Mathematics}
+The simulation is driven by several core mathematical models:
+
+\paragraph{1. X-Ray Projection (Beer-Lambert Law)}
+The transmission of X-rays through the body is calculated using the Beer-Lambert law. The detected intensity $I(u,v)$ at pixel $(u,v)$ is:
+\[ I(u,v) = I_0 \cdot \exp\left( - \int \mu(x,y,z) \, dl \right) \]
+In the discrete voxel space of the simulator, this is approximated as:
+\[ I_{discrete}(u,v) = \exp\left( - \sum_{i} \mu_i(u,v) \cdot \Delta l \right) \]
+\textit{(Note: $I_0$ is normalized to 1.0, $\mu$ is the linear attenuation coefficient at 70 keV, and $\Delta l$ represents the voxel size of 0.30 cm).}
+
+\paragraph{2. Motion Artifacts (Temporal Integration)}
+Motion is integrated over the exposure window $T$ to create the final blurred signal:
+\[ P_{final}(u,v) = \frac{1}{T} \int_0^T P(u,v; t) \, dt \approx \frac{1}{N} \sum_{i=0}^{N-1} P(u,v; t_i) \]
+Displacement models include linear uniform drift ($d(t) = v \cdot t$) and sinusoidal periodic movements like breathing ($d(t) = A \cdot \sin(2\pi f t)$).
+
+\paragraph{3. Detector Noise Models}
+\begin{itemize}
+    \item \textbf{Poisson (Quantum Noise):} $k \sim \text{Poisson}(N_0 \cdot I)$
+    \item \textbf{Gaussian (Electronic Noise):} $\hat{I} = I + \mathcal{N}(0, \sigma^2)$ where $\sigma = \frac{1}{\sqrt{N_0}}$
+    \item \textbf{Combined:} $\hat{I} = \frac{k + r}{N_0}$, incorporating baseline read-out noise where $r \sim \mathcal{N}(0, \sigma_{read}^2)$ and $\sigma_{read} = 0.01 \cdot \sqrt{N_0}$.
+\end{itemize}
+
+\paragraph{4. Artifact Mitigation Techniques}
+\begin{itemize}
+    \item \textbf{Unsharp Masking:} $I_{mitigated} = I + 0.65 \cdot (I - (I * G_{\sigma}))$
+    \item \textbf{Richardson-Lucy Deconvolution:} $u^{(k+1)} = u^{(k)} \cdot \left( \tilde{h} * \frac{d}{h * u^{(k)}} \right)$
+\end{itemize}
+
+\paragraph{5. Evaluation Metrics}
+\begin{itemize}
+    \item \textbf{SNR:} $\text{SNR (dB)} = 20 \cdot \log_{10}\left( \frac{\text{RMS}_{signal}}{\text{RMS}_{noise}} \right)$
+    \item \textbf{PSNR:} $\text{PSNR (dB)} = 10 \cdot \log_{10}\left( \frac{MAX_I^2}{\text{MSE}} \right)$
+\end{itemize}
+
+\subsection{Flow}
+The software architecture follows a linear pipeline replicating clinical acquisition:
+\begin{enumerate}
+    \item \textbf{Phantom Generation:} Initializes the 3D mathematical model of the patient's anatomy.
+    \item \textbf{User Configuration:} Registers all user inputs from the GUI regarding geometry, motion, and noise.
+    \item \textbf{Simulation Loop:} Discretizes the exposure time into multiple sub-intervals. For each interval, the software calculates displacement, shifts the 3D volume, projects the 2D image via the Beer-Lambert law, and averages all frames to produce the motion-blurred image.
+    \item \textbf{Noise Addition:} Applies the configured Poisson and/or Gaussian noise models based on simulated photon flux.
+    \item \textbf{Mitigation:} Executes the selected filtering or deconvolution algorithms on the degraded image.
+    \item \textbf{Metrics \& Display:} Computes SNR and PSNR, updating the interface to show a side-by-side comparison of the ideal static image, the corrupted image, and the final mitigated image.
+\end{enumerate}
+
+\section{Expected Results}
+Upon completion, the simulator will successfully generate three distinct visual outputs for any given test case: a perfect ``ground truth'' static projection, a realistic image degraded by the precise mathematical combination of user-defined motion and quantum/electronic noise, and a restored image post-mitigation. The software will output reliable quantitative metrics (SNR and PSNR) that allow users to objectively evaluate the efficacy of Unsharp Masking versus Richardson-Lucy Deconvolution under varying clinical parameters.
+
+\end{document}
