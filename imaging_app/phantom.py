@@ -5,7 +5,7 @@ from scipy import ndimage
 
 from .constants import BODY_PARTS, MU
 
-
+#TODO: make a more convenient phantom 
 def build_phantom(size=(64, 64, 120)):
     """Construct a 3-D numerical human phantom with attenuation coefficients."""
     nx, ny, nz = size

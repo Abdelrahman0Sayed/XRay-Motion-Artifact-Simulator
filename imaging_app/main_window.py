@@ -3,7 +3,7 @@
 import numpy as np
 from pubsub import pub
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, pyqtSignal, Qt, QMetaObject, Q_ARG
 from PyQt5.QtWidgets import (
     QComboBox,
     QFrame,
@@ -36,6 +36,10 @@ from .worker import SimulationWorker
 
 
 class MainWindow(QMainWindow):
+    sig_sim_progress = pyqtSignal(int)
+    sig_sim_done = pyqtSignal(object)
+    sig_sim_error = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("  X-Ray Motion Artifact Simulator  -  SBE 4220")
@@ -47,6 +51,10 @@ class MainWindow(QMainWindow):
         self._vel_val = 1.50
         self._amp_val = 1.50
         self._freq_val = 0.30
+
+        self.sig_sim_progress.connect(self._do_sim_progress)
+        self.sig_sim_done.connect(self._do_sim_done)
+        self.sig_sim_error.connect(self._do_sim_error)
 
         self._register_pubsub()
 
@@ -390,41 +398,44 @@ class MainWindow(QMainWindow):
         self._sim_worker.start()
 
     def _on_sim_progress(self, message: SimulationProgressMessage):
-        QTimer.singleShot(0, lambda v=message.value: self.progress.setValue(v))
+        self.sig_sim_progress.emit(message.value)
+
+    def _do_sim_progress(self, value):
+        self.progress.setValue(value)
 
     def _on_sim_done(self, message: SimulationDoneMessage):
-        def update_ui():
-            self.canvas2d.show_results(message.static, message.motion, message.mitigated, message.params)
+        self.sig_sim_done.emit(message)
 
-            snr_m = message.metrics.get("snr_motion", float("nan"))
-            snr_r = message.metrics.get("snr_mitigated", float("nan"))
-            psnr = message.metrics.get("psnr_mitig", float("nan"))
+    def _do_sim_done(self, message: SimulationDoneMessage):
+        self.canvas2d.show_results(message.static, message.motion, message.mitigated, message.params)
 
-            def fmt_db(v):
-                return f"{v:.1f} dB" if np.isfinite(v) else "-"
+        snr_m = message.metrics.get("snr_motion", float("nan"))
+        snr_r = message.metrics.get("snr_mitigated", float("nan"))
+        psnr = message.metrics.get("psnr_mitig", float("nan"))
 
-            self.lbl_snr_m.setText(f"Motion SNR: {fmt_db(snr_m)}")
-            self.lbl_snr_r.setText(f"Mitigated SNR: {fmt_db(snr_r)}")
-            self.lbl_psnr_m.setText(f"PSNR: {fmt_db(psnr)}")
+        def fmt_db(v):
+            return f"{v:.1f} dB" if np.isfinite(v) else "-"
 
-            self.shoot_btn.setEnabled(True)
-            self.shoot_btn.setText("SHOOT X-RAY")
-            self.progress.setVisible(False)
+        self.lbl_snr_m.setText(f"Motion SNR: {fmt_db(snr_m)}")
+        self.lbl_snr_r.setText(f"Mitigated SNR: {fmt_db(snr_r)}")
+        self.lbl_psnr_m.setText(f"PSNR: {fmt_db(psnr)}")
 
-            delta = snr_r - snr_m if np.isfinite(snr_m) and np.isfinite(snr_r) else 0
-            arrow = "up" if delta >= 0 else "down"
-            self.statusBar().showMessage(
-                f"Done. Motion SNR = {fmt_db(snr_m)} -> After mitigation = {fmt_db(snr_r)} ({arrow} {abs(delta):.1f} dB)"
-            )
+        self.shoot_btn.setEnabled(True)
+        self.shoot_btn.setText("SHOOT X-RAY")
+        self.progress.setVisible(False)
 
-        QTimer.singleShot(0, update_ui)
+        delta = snr_r - snr_m if np.isfinite(snr_m) and np.isfinite(snr_r) else 0
+        arrow = "up" if delta >= 0 else "down"
+        self.statusBar().showMessage(
+            f"Done. Motion SNR = {fmt_db(snr_m)} -> After mitigation = {fmt_db(snr_r)} ({arrow} {abs(delta):.1f} dB)"
+        )
 
     def _on_sim_error(self, message: SimulationErrorMessage):
-        def show_error():
-            QMessageBox.critical(self, "Simulation Error", message.traceback_text)
-            self.shoot_btn.setEnabled(True)
-            self.shoot_btn.setText("SHOOT X-RAY")
-            self.progress.setVisible(False)
-            self.statusBar().showMessage("Simulation failed - see error dialog.")
+        self.sig_sim_error.emit(message.traceback_text)
 
-        QTimer.singleShot(0, show_error)
+    def _do_sim_error(self, traceback_text):
+        QMessageBox.critical(self, "Simulation Error", traceback_text)
+        self.shoot_btn.setEnabled(True)
+        self.shoot_btn.setText("SHOOT X-RAY")
+        self.progress.setVisible(False)
+        self.statusBar().showMessage("Simulation failed - see error dialog.")
