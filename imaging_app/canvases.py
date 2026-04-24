@@ -160,78 +160,69 @@ class Phantom3DCanvas(FigureCanvas):
         self.draw_idle()
 
 
-class Projection2DCanvas(FigureCanvas):
-    """Three-panel display: static | motion blur | mitigated."""
+class ProjectionImageCanvas(FigureCanvas):
+    """Single image viewer panel used in DICOM-style layout."""
 
     BG = "#090912"
 
     def __init__(self, parent=None):
-        self.fig = Figure(figsize=(7, 4.5), facecolor=self.BG)
+        self.fig = Figure(figsize=(4.2, 3.4), facecolor=self.BG)
         super().__init__(self.fig)
         self.setParent(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.fig.patch.set_facecolor(self.BG)
         self.film_mode = True
         self.show_centerlines = False
-        self._last_results = None
+        self._last_image = None
+        self._last_title = ""
+        self._last_title_color = "#66aaff"
         self._placeholder()
 
     def set_film_mode(self, enabled):
         self.film_mode = bool(enabled)
-        if self._last_results is not None:
-            self.show_results(*self._last_results)
+        if self._last_image is not None:
+            self.show_image(self._last_image, self._last_title, self._last_title_color)
 
     def set_centerlines_enabled(self, enabled):
         self.show_centerlines = bool(enabled)
-        if self._last_results is not None:
-            self.show_results(*self._last_results)
+        if self._last_image is not None:
+            self.show_image(self._last_image, self._last_title, self._last_title_color)
 
-    def _placeholder(self):
+    def _placeholder(self, line1="No image yet.", line2="Run simulation to populate this panel"):
         self.fig.clf()
         ax = self.fig.add_subplot(111)
         ax.set_facecolor("#0d0d1e")
-        ax.text(0.5, 0.52, "No exposure yet.", ha="center", va="center", color="#3a4a6a", fontsize=13, fontweight="bold", transform=ax.transAxes)
-        ax.text(0.5, 0.42, "Configure parameters and press  SHOOT X-RAY", ha="center", va="center", color="#2a3a58", fontsize=9, transform=ax.transAxes)
+        ax.text(0.5, 0.52, line1, ha="center", va="center", color="#3a4a6a", fontsize=12, fontweight="bold", transform=ax.transAxes)
+        ax.text(0.5, 0.42, line2, ha="center", va="center", color="#2a3a58", fontsize=8.5, transform=ax.transAxes)
         ax.axis("off")
         self.draw_idle()
 
-    def show_results(self, static, motion, mitigated, params):
-        self._last_results = (static, motion, mitigated, params)
+    def show_image(self, image, title, title_color="#66aaff"):
+        self._last_image = image
+        self._last_title = title
+        self._last_title_color = title_color
+
         self.fig.clf()
-        cmap = "gray"
-        titles = [
-            "1) Static (no motion)",
-            "2) Motion Artifact\n" + motion_label(params),
-            f"3) Mitigated\n({params.mitigation})",
-        ]
-        images = [static, motion, mitigated]
-        colors = ["#66aaff", "#ff6644", "#44ee88"]
+        ax = self.fig.add_subplot(111)
+        ax.set_facecolor("#000008")
+        display_img = (1.0 - image) if self.film_mode else image
+        ax.imshow(display_img.T, cmap="gray", vmin=0, vmax=1, aspect="equal", interpolation="bilinear", origin="lower")
 
-        for k, (img, ttl, col) in enumerate(zip(images, titles, colors)):
-            ax = self.fig.add_subplot(1, 3, k + 1)
-            ax.set_facecolor("#000008")
-            display_img = (1.0 - img) if self.film_mode else img
-            ax.imshow(display_img.T, cmap=cmap, vmin=0, vmax=1, aspect="auto", interpolation="bilinear", origin="lower")
-            if self.show_centerlines:
-                h, w = display_img.T.shape
-                x_mid = (w - 1) / 2.0
-                y_mid = (h - 1) / 2.0
-                ax.axvline(x_mid, color="#ffde59", linestyle="--", linewidth=0.8, alpha=0.9)
-                ax.axhline(y_mid, color="#ffde59", linestyle="--", linewidth=0.8, alpha=0.9)
-            ax.set_title(ttl, color=col, fontsize=7.5, pad=5, fontweight="bold")
-            ax.axis("off")
-            for spine in ax.spines.values():
-                spine.set_edgecolor(col)
-                spine.set_linewidth(1.2)
-                spine.set_visible(True)
+        if self.show_centerlines:
+            h, w = display_img.T.shape
+            x_mid = (w - 1) / 2.0
+            y_mid = (h - 1) / 2.0
+            ax.axvline(x_mid, color="#ffde59", linestyle="--", linewidth=0.8, alpha=0.9)
+            ax.axhline(y_mid, color="#ffde59", linestyle="--", linewidth=0.8, alpha=0.9)
 
-        self.fig.suptitle(
-            f"Exposure {params.exposure_time:.2f} s  -  N0 = {params.n_photons:,}",
-            color="#5566aa",
-            fontsize=7.5,
-            y=0.01,
-        )
-        self.fig.tight_layout(rect=[0, 0.05, 1, 0.97])
+        ax.set_title(title, color=title_color, fontsize=8.5, pad=6, fontweight="bold")
+        ax.axis("off")
+        for spine in ax.spines.values():
+            spine.set_edgecolor(title_color)
+            spine.set_linewidth(1.2)
+            spine.set_visible(True)
+
+        self.fig.tight_layout(pad=1.0)
         self.draw_idle()
 
 

@@ -3,7 +3,7 @@
 import numpy as np
 from pubsub import pub
 
-from PyQt5.QtCore import QTimer, pyqtSignal, Qt, QMetaObject, Q_ARG
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
     QFrame,
@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from .canvases import Phantom3DCanvas, Projection2DCanvas
+from .canvases import Phantom3DCanvas, ProjectionImageCanvas, motion_label
 from .constants import APP_STYLE, BODY_PARTS, PROJ_AXES
 from .messaging import topics
 from .messaging.message_types import (
@@ -86,39 +86,23 @@ class MainWindow(QMainWindow):
         root.setSpacing(10)
         root.setContentsMargins(10, 10, 10, 10)
 
-        left_box = QFrame()
-        left_box.setStyleSheet("QFrame { border: 1px solid #1a2648; border-radius:8px; }")
-        left_lay = QVBoxLayout(left_box)
-        left_lay.setContentsMargins(3, 3, 3, 3)
+        controls_box = QFrame()
+        controls_box.setStyleSheet("QFrame { border: 1px solid #1a2648; border-radius:8px; }")
+        controls_box.setMinimumWidth(300)
+        controls_box.setMaximumWidth(305)
+        controls_lay = QVBoxLayout(controls_box)
+        controls_lay.setContentsMargins(2, 2, 2, 2)
 
-        lbl_3d = QLabel("  3-D PHANTOM VIEWER")
-        lbl_3d.setObjectName("header")
-        lbl_3d.setStyleSheet("background:#0f1428; color:#4466aa; padding:6px; font-size:10px; letter-spacing:1px; border-radius:4px;")
-        left_lay.addWidget(lbl_3d)
-
-        self.canvas3d = Phantom3DCanvas(self.phantom)
-        left_lay.addWidget(self.canvas3d)
-
-        leg_row = QHBoxLayout()
-        for txt, col in [
-            ("o Bone", "#e8e8e8"),
-            ("o Tissue", "#b07850"),
-            ("o Lung", "#6aadcc"),
-            ("o Organ", "#bb3333"),
-            ("* Source", "#ffcc00"),
-            ("[] Detector", "#44eebb"),
-        ]:
-            lb = QLabel(txt)
-            lb.setStyleSheet(f"color:{col}; font-size:9px;")
-            leg_row.addWidget(lb)
-        left_lay.addLayout(leg_row)
-
-        root.addWidget(left_box, stretch=38)
+        lbl_controls = QLabel("  CONTROL PANEL")
+        lbl_controls.setObjectName("header")
+        lbl_controls.setStyleSheet("background:#0f1428; color:#4466aa; padding:6px; font-size:10px; letter-spacing:1px; border-radius:4px;")
+        controls_lay.addWidget(lbl_controls)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(265)
-        scroll.setMaximumWidth(295)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setMinimumWidth(0)
+        scroll.setMaximumWidth(16777215)
         ctrl_w = QWidget()
         ctrl_lay = QVBoxLayout(ctrl_w)
         ctrl_lay.setSpacing(8)
@@ -141,19 +125,58 @@ class MainWindow(QMainWindow):
 
         ctrl_lay.addStretch(1)
         scroll.setWidget(ctrl_w)
-        root.addWidget(scroll, stretch=22)
+        controls_lay.addWidget(scroll)
 
-        right_box = QFrame()
-        right_box.setStyleSheet("QFrame { border: 1px solid #1a2648; border-radius:8px; }")
-        right_lay = QVBoxLayout(right_box)
-        right_lay.setContentsMargins(3, 3, 3, 3)
+        root.addWidget(controls_box)
 
-        lbl_2d = QLabel("  2-D PROJECTION RESULTS")
-        lbl_2d.setStyleSheet("background:#0f1428; color:#4466aa; padding:6px; font-size:10px; letter-spacing:1px; border-radius:4px;")
-        right_lay.addWidget(lbl_2d)
+        content_box = QFrame()
+        content_box.setStyleSheet("QFrame { border: 1px solid #1a2648; border-radius:8px; }")
+        content_lay = QVBoxLayout(content_box)
+        content_lay.setContentsMargins(3, 3, 3, 3)
 
-        self.canvas2d = Projection2DCanvas()
-        right_lay.addWidget(self.canvas2d)
+        viewer_grid = QGridLayout()
+        viewer_grid.setSpacing(8)
+
+        panel_static, lay_static = self._create_viewer_panel("  STATIC IMAGE")
+        self.canvas_static = ProjectionImageCanvas()
+        lay_static.addWidget(self.canvas_static)
+
+        panel_motion, lay_motion = self._create_viewer_panel("  MOTION ARTIFACT")
+        self.canvas_motion = ProjectionImageCanvas()
+        lay_motion.addWidget(self.canvas_motion)
+
+        panel_mitig, lay_mitig = self._create_viewer_panel("  MITIGATED RESULT")
+        self.canvas_mitig = ProjectionImageCanvas()
+        lay_mitig.addWidget(self.canvas_mitig)
+
+        panel_3d, lay_3d = self._create_viewer_panel("  3-D PHANTOM VIEWER")
+        self.canvas3d = Phantom3DCanvas(self.phantom)
+        lay_3d.addWidget(self.canvas3d)
+
+        leg_row = QHBoxLayout()
+        for txt, col in [
+            ("o Bone", "#e8e8e8"),
+            ("o Tissue", "#b07850"),
+            ("o Lung", "#6aadcc"),
+            ("o Organ", "#bb3333"),
+            ("* Source", "#ffcc00"),
+            ("[] Detector", "#44eebb"),
+        ]:
+            lb = QLabel(txt)
+            lb.setStyleSheet(f"color:{col}; font-size:9px;")
+            leg_row.addWidget(lb)
+        lay_3d.addLayout(leg_row)
+
+        viewer_grid.addWidget(panel_static, 0, 0)
+        viewer_grid.addWidget(panel_motion, 0, 1)
+        viewer_grid.addWidget(panel_mitig, 1, 0)
+        viewer_grid.addWidget(panel_3d, 1, 1)
+        viewer_grid.setColumnStretch(0, 1)
+        viewer_grid.setColumnStretch(1, 1)
+        viewer_grid.setRowStretch(0, 1)
+        viewer_grid.setRowStretch(1, 1)
+
+        content_lay.addLayout(viewer_grid)
 
         metrics = QHBoxLayout()
         self.lbl_snr_m = QLabel("Motion SNR: -")
@@ -162,9 +185,22 @@ class MainWindow(QMainWindow):
         for lb in (self.lbl_snr_m, self.lbl_snr_r, self.lbl_psnr_m):
             lb.setStyleSheet("color:#4488dd; font-size:10px; font-weight:600;")
             metrics.addWidget(lb)
-        right_lay.addLayout(metrics)
+        content_lay.addLayout(metrics)
 
-        root.addWidget(right_box, stretch=48)
+        root.addWidget(content_box, stretch=1)
+
+    def _create_viewer_panel(self, title):
+        panel = QFrame()
+        panel.setStyleSheet("QFrame { border: 1px solid #1a2648; border-radius:8px; }")
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(3, 3, 3, 3)
+
+        hdr = QLabel(title)
+        hdr.setObjectName("header")
+        hdr.setStyleSheet("background:#0f1428; color:#4466aa; padding:6px; font-size:10px; letter-spacing:1px; border-radius:4px;")
+        lay.addWidget(hdr)
+
+        return panel, lay
 
     def _grp_target(self):
         g = QGroupBox("TARGET & DIRECTION")
@@ -351,8 +387,11 @@ class MainWindow(QMainWindow):
         label_widget.setText(base if enabled else f"{base} (disabled)")
 
     def _on_view_option_changed(self):
-        self.canvas2d.set_film_mode(self.btn_film_mode.isChecked())
-        self.canvas2d.set_centerlines_enabled(self.btn_centerlines.isChecked())
+        enabled_film = self.btn_film_mode.isChecked()
+        enabled_lines = self.btn_centerlines.isChecked()
+        for canvas in (self.canvas_static, self.canvas_motion, self.canvas_mitig):
+            canvas.set_film_mode(enabled_film)
+            canvas.set_centerlines_enabled(enabled_lines)
 
     def _refresh_tube(self):
         if hasattr(self, "canvas3d"):
@@ -407,7 +446,9 @@ class MainWindow(QMainWindow):
         self.sig_sim_done.emit(message)
 
     def _do_sim_done(self, message: SimulationDoneMessage):
-        self.canvas2d.show_results(message.static, message.motion, message.mitigated, message.params)
+        self.canvas_static.show_image(message.static, "Static (no motion)", "#66aaff")
+        self.canvas_motion.show_image(message.motion, f"Motion Artifact - {motion_label(message.params)}", "#ff6644")
+        self.canvas_mitig.show_image(message.mitigated, f"Mitigated ({message.params.mitigation})", "#44ee88")
 
         snr_m = message.metrics.get("snr_motion", float("nan"))
         snr_r = message.metrics.get("snr_mitigated", float("nan"))
