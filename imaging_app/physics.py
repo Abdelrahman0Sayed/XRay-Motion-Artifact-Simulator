@@ -3,7 +3,7 @@
 import numpy as np
 from scipy import ndimage
 from scipy.signal import wiener
-
+from skimage.restoration import richardson_lucy
 from .constants import BODY_PARTS, VOXEL_SIZE
 
 
@@ -274,9 +274,10 @@ def add_noise(proj, noise_type, n0):
 # Mitigation / restoration
 # ---------------------------------------------------------------------------
 
-def apply_mitigation(image, method):
+def apply_mitigation(image, p):
     """Post-acquisition mitigation and restoration methods."""
     img = image.copy()
+    method = p.mitigation
 
     if method == "None":
         return img
@@ -290,36 +291,80 @@ def apply_mitigation(image, method):
         blur = ndimage.gaussian_filter(img, sigma=1.5)
         return np.clip(img + 0.65 * (img - blur), 0, 1).astype(np.float32)
     if method == "RL Deconvolution":
-        return _rl_deconv(img, psf=9, iters=12)
+        return _rl_deconv(img, p, iters=15)
 
     return img
 
 
-def _rl_deconv(image, psf=9, iters=12):
-    """Richardson-Lucy iterative deconvolution with a uniform box PSF."""
-    psf_k = np.ones((psf, psf), dtype=np.float32) / (psf * psf)
-    u = image.copy()
-    for _ in range(iters):
-        conv  = ndimage.convolve(u, psf_k, mode="reflect")
-        conv  = np.where(conv < 1e-12, 1e-12, conv)
-        ratio = image / conv
-        u     = u * ndimage.convolve(ratio, psf_k[::-1, ::-1], mode="reflect")
-    return np.clip(u, 0, 1).astype(np.float32)
+def _rl_deconv(image, p, iters=15):
+    """Richardson-Lucy deconvolution using scikit-image and spatial masking."""
+    if p.motion_type == "none":
+        return image
+
+    # 1. Calculate physical blur extent
+    if p.motion_type == "linear":
+        total_d = p.velocity * p.exposure_time
+    else:
+        total_d = 2.0 * p.amplitude
+
+    blur_pixels = max(3, int(total_d / VOXEL_SIZE))
+
+    # 2. Build a smooth 1D Kernel
+    window = np.hanning(blur_pixels + 2)[1:-1]
+    window /= window.sum()
+    
+    if p.motion_axis == 2:
+        psf_k = window.reshape(1, -1).astype(np.float32)
+    else:
+        psf_k = window.reshape(-1, 1).astype(np.float32)
+
+    # 3. Built-in Richardson-Lucy Iterations
+    # clip=False prevents the function from clamping values before we apply our mask
+    u = richardson_lucy(image, psf_k, num_iter=iters, clip=False)
+
+    # 4. Spatially-Aware Masking
+    nz = image.shape[1]
+    w_z = _motion_weight_vector(nz, p.body_part, p.motion_type)
+    mask_2d = np.tile(w_z, (image.shape[0], 1)).astype(np.float32)
+    
+    u_blended = u * mask_2d + image * (1.0 - mask_2d)
+
+    return np.clip(u_blended, 0, 1).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
 # Quality metrics
 # ---------------------------------------------------------------------------
 
-def compute_snr(reference, noisy):
-    """RMS SNR in dB: 20·log10(σ_signal / σ_noise)."""
-    noise = noisy - reference
-    rms_s = np.sqrt(np.mean(reference ** 2))
-    rms_n = np.sqrt(np.mean(noise ** 2))
-    return 20 * np.log10(rms_s / rms_n) if rms_n > 1e-12 else float("inf")
-
-
-def compute_psnr(reference, noisy):
-    """Peak SNR in dB: 10·log10(MAX² / MSE), with MAX = 1.0."""
+def compute_nmse(reference, noisy):
+    """Normalized Mean Square Error: ||ref - noisy||^2 / ||ref||^2."""
     mse = np.mean((reference - noisy) ** 2)
-    return 10 * np.log10(1.0 / mse) if mse > 1e-12 else float("inf")
+    norm_factor = np.mean(reference ** 2)
+    return mse / norm_factor if norm_factor > 1e-12 else float("inf")
+
+
+def compute_ssim(reference, noisy):
+    """Structural Similarity Index Measure (SSIM) using local uniform windows."""
+    # Constants based on standard SSIM formulation (dynamic range L = 1.0)
+    c1 = (0.01 * 1.0) ** 2
+    c2 = (0.03 * 1.0) ** 2
+    win_size = 7
+
+    # Local means
+    mu1 = ndimage.uniform_filter(reference, size=win_size)
+    mu2 = ndimage.uniform_filter(noisy, size=win_size)
+
+    mu1_sq = mu1 ** 2
+    mu2_sq = mu2 ** 2
+    mu1_mu2 = mu1 * mu2
+
+    # Local variances and covariance
+    sigma1_sq = ndimage.uniform_filter(reference ** 2, size=win_size) - mu1_sq
+    sigma2_sq = ndimage.uniform_filter(noisy ** 2, size=win_size) - mu2_sq
+    sigma12 = ndimage.uniform_filter(reference * noisy, size=win_size) - mu1_mu2
+
+    # SSIM map
+    ssim_map = ((2 * mu1_mu2 + c1) * (2 * sigma12 + c2)) / \
+               ((mu1_sq + mu2_sq + c1) * (sigma1_sq + sigma2_sq + c2))
+
+    return np.mean(ssim_map)

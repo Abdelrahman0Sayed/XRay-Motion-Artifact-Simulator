@@ -16,8 +16,8 @@ from .phantom import crop_phantom
 from .physics import (
     add_noise,
     apply_mitigation,
-    compute_psnr,
-    compute_snr,
+    compute_nmse,  
+    compute_ssim,  
     project_parallel,
     simulate_acquisition,
 )
@@ -49,15 +49,17 @@ class SimulationWorker(threading.Thread):
             noisy = add_noise(motion_proj, p.noise_type, p.n_photons)
 
             pub.sendMessage(topics.SIM_PROGRESS, message=SimulationProgressMessage(83))
-            mitigated = apply_mitigation(noisy, p.mitigation)
+            mitigated = apply_mitigation(noisy, p)
 
             pub.sendMessage(topics.SIM_PROGRESS, message=SimulationProgressMessage(95))
             metrics = {
-                "snr_motion": compute_snr(static_proj, noisy),
-                "snr_mitigated": compute_snr(static_proj, mitigated),
-                "psnr_motion": compute_psnr(static_proj, noisy),
-                "psnr_mitig": compute_psnr(static_proj, mitigated),
+                "nmse_motion": compute_nmse(static_proj, noisy),
+                "nmse_mitigated": compute_nmse(static_proj, mitigated),
+                "ssim_motion": compute_ssim(static_proj, noisy),
+                "ssim_mitig": compute_ssim(static_proj, mitigated),
             }
+
+            pub.sendMessage(topics.SIM_PROGRESS, message=SimulationProgressMessage(100))
 
             pub.sendMessage(topics.SIM_PROGRESS, message=SimulationProgressMessage(100))
             pub.sendMessage(

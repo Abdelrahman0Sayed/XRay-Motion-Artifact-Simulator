@@ -1,6 +1,7 @@
 """Main application window and UI behavior."""
 
 import numpy as np
+from dataclasses import replace
 from pubsub import pub
 
 from PyQt5.QtCore import pyqtSignal
@@ -33,7 +34,11 @@ from .messaging.message_types import (
 )
 from .phantom import build_phantom
 from .worker import SimulationWorker
-
+from .physics import (
+    apply_mitigation,
+    compute_nmse,
+    compute_ssim,
+)
 
 class MainWindow(QMainWindow):
     sig_sim_progress = pyqtSignal(int)
@@ -51,7 +56,9 @@ class MainWindow(QMainWindow):
         self._vel_val = 1.50
         self._amp_val = 1.50
         self._freq_val = 0.30
-
+        self._last_static = None
+        self._last_motion = None
+        self._last_params = None
         self.sig_sim_progress.connect(self._do_sim_progress)
         self.sig_sim_done.connect(self._do_sim_done)
         self.sig_sim_error.connect(self._do_sim_error)
@@ -123,6 +130,19 @@ class MainWindow(QMainWindow):
         self.shoot_btn.clicked.connect(self._on_shoot)
         ctrl_lay.addWidget(self.shoot_btn)
 
+        self.btn_mitigate = QPushButton("MITIGATE MOTION")
+        self.btn_mitigate.setStyleSheet("""
+            QPushButton {
+                background: #182441; border: 1px solid #30508a; border-radius: 6px;
+                color: #a9c4ff; font-size: 13px; font-weight: bold; padding: 10px; margin-top: 5px;
+            }
+            QPushButton:hover { border-color: #5f9fff; background: #254f95; }
+            QPushButton:disabled { background: #14182a; color: #444466; border-color: #2a2a44; }
+        """)
+        self.btn_mitigate.clicked.connect(self._on_mitigate_clicked)
+        self.btn_mitigate.setEnabled(False)
+        ctrl_lay.addWidget(self.btn_mitigate)
+
         ctrl_lay.addStretch(1)
         scroll.setWidget(ctrl_w)
         controls_lay.addWidget(scroll)
@@ -179,10 +199,12 @@ class MainWindow(QMainWindow):
         content_lay.addLayout(viewer_grid)
 
         metrics = QHBoxLayout()
-        self.lbl_snr_m = QLabel("Motion SNR: -")
-        self.lbl_snr_r = QLabel("Mitigated SNR: -")
-        self.lbl_psnr_m = QLabel("PSNR: -")
-        for lb in (self.lbl_snr_m, self.lbl_snr_r, self.lbl_psnr_m):
+        self.lbl_nmse_m = QLabel("Motion NMSE: -")
+        self.lbl_nmse_r = QLabel("Mitigated NMSE: -")
+        self.lbl_ssim_m = QLabel("Motion SSIM: -")      # Added Motion SSIM label
+        self.lbl_ssim_r = QLabel("Mitigated SSIM: -")
+        
+        for lb in (self.lbl_nmse_m, self.lbl_nmse_r, self.lbl_ssim_m, self.lbl_ssim_r):
             lb.setStyleSheet("color:#4488dd; font-size:10px; font-weight:600;")
             metrics.addWidget(lb)
         content_lay.addLayout(metrics)
@@ -446,31 +468,69 @@ class MainWindow(QMainWindow):
         self.sig_sim_done.emit(message)
 
     def _do_sim_done(self, message: SimulationDoneMessage):
+
+        self._last_static = message.static
+        self._last_motion = message.motion
+        self._last_params = message.params
+        
+        self.btn_mitigate.setEnabled(True)
         self.canvas_static.show_image(message.static, "Static (no motion)", "#66aaff")
         self.canvas_motion.show_image(message.motion, f"Motion Artifact - {motion_label(message.params)}", "#ff6644")
         self.canvas_mitig.show_image(message.mitigated, f"Mitigated ({message.params.mitigation})", "#44ee88")
 
-        snr_m = message.metrics.get("snr_motion", float("nan"))
-        snr_r = message.metrics.get("snr_mitigated", float("nan"))
-        psnr = message.metrics.get("psnr_mitig", float("nan"))
+        nmse_m = message.metrics.get("nmse_motion", float("nan"))
+        nmse_r = message.metrics.get("nmse_mitigated", float("nan"))
+        ssim_m = message.metrics.get("ssim_motion", float("nan"))  # Extract Motion SSIM
+        ssim_r = message.metrics.get("ssim_mitig", float("nan"))
 
-        def fmt_db(v):
-            return f"{v:.1f} dB" if np.isfinite(v) else "-"
+        def fmt_val(v):
+            return f"{v:.4f}" if np.isfinite(v) else "-"
 
-        self.lbl_snr_m.setText(f"Motion SNR: {fmt_db(snr_m)}")
-        self.lbl_snr_r.setText(f"Mitigated SNR: {fmt_db(snr_r)}")
-        self.lbl_psnr_m.setText(f"PSNR: {fmt_db(psnr)}")
+        self.lbl_nmse_m.setText(f"Motion NMSE: {fmt_val(nmse_m)}")
+        self.lbl_nmse_r.setText(f"Mitigated NMSE: {fmt_val(nmse_r)}")
+        self.lbl_ssim_m.setText(f"Motion SSIM: {fmt_val(ssim_m)}")  # Display Motion SSIM
+        self.lbl_ssim_r.setText(f"Mitigated SSIM: {fmt_val(ssim_r)}")
 
         self.shoot_btn.setEnabled(True)
         self.shoot_btn.setText("SHOOT X-RAY")
         self.progress.setVisible(False)
 
-        delta = snr_r - snr_m if np.isfinite(snr_m) and np.isfinite(snr_r) else 0
-        arrow = "up" if delta >= 0 else "down"
+        # For NMSE, a lower value indicates improvement
+        delta = nmse_m - nmse_r if np.isfinite(nmse_m) and np.isfinite(nmse_r) else 0
+        arrow = "down" if delta >= 0 else "up"
         self.statusBar().showMessage(
-            f"Done. Motion SNR = {fmt_db(snr_m)} -> After mitigation = {fmt_db(snr_r)} ({arrow} {abs(delta):.1f} dB)"
+            f"Done. Motion NMSE = {fmt_val(nmse_m)} -> After mitigation = {fmt_val(nmse_r)} ({arrow} {abs(delta):.4f})"
         )
 
+    def _on_mitigate_clicked(self):
+        if self._last_static is None or self._last_motion is None:
+            return
+
+        # Apply mitigation locally using a fresh params copy because SimulationParams is frozen
+        selected_method = self.cb_mitig.currentText()
+        params_for_mitigation = replace(self._last_params, mitigation=selected_method)
+
+        mitigated = apply_mitigation(self._last_motion, params_for_mitigation)
+
+        # Compute new metrics
+        nmse_r = compute_nmse(self._last_static, mitigated)
+        ssim_r = compute_ssim(self._last_static, mitigated)
+
+        # Update UI components
+        def fmt_val(v):
+            return f"{v:.4f}" if np.isfinite(v) else "-"
+
+        self.canvas_mitig.show_image(mitigated, f"Mitigated ({selected_method})", "#44ee88")
+        self.lbl_nmse_r.setText(f"Mitigated NMSE: {fmt_val(nmse_r)}")
+        self.lbl_ssim_r.setText(f"Mitigated SSIM: {fmt_val(ssim_r)}")
+
+        # Calculate original motion NMSE to show delta in status bar
+        nmse_m = compute_nmse(self._last_static, self._last_motion)
+        delta = nmse_m - nmse_r if np.isfinite(nmse_m) and np.isfinite(nmse_r) else 0
+        arrow = "down" if delta >= 0 else "up"
+        self.statusBar().showMessage(
+            f"Instant Mitigation Applied. Motion NMSE = {fmt_val(nmse_m)} -> Mitigated = {fmt_val(nmse_r)} ({arrow} {abs(delta):.4f})"
+        )
     def _on_sim_error(self, message: SimulationErrorMessage):
         self.sig_sim_error.emit(message.traceback_text)
 
