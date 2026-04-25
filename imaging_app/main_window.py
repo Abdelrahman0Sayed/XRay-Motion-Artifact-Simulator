@@ -315,7 +315,7 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.addWidget(QLabel("Motion Type:"))
         self.cb_motion = QComboBox()
-        self.cb_motion.addItems(["none", "linear", "breathing", "cardiac"])
+        self.cb_motion.addItems(["none", "linear", "breathing"])
         self.cb_motion.setCurrentText("breathing")
         self.cb_motion.currentTextChanged.connect(self._on_motion_type_changed)
         row.addWidget(self.cb_motion)
@@ -351,13 +351,10 @@ class MainWindow(QMainWindow):
         self.cb_mitig = QComboBox()
         self.cb_mitig.addItems([
             "None",
-            "Median Filter",
-            "Gaussian Smooth",
-            "Wiener Filter",
             "Unsharp Mask",
             "RL Deconvolution",
         ])
-        self.cb_mitig.setCurrentText("Wiener Filter")
+        self.cb_mitig.setCurrentText("RL Deconvolution")
         lay.addWidget(self.cb_mitig)
         return g
 
@@ -384,7 +381,7 @@ class MainWindow(QMainWindow):
 
     def _on_motion_type_changed(self, mtype):
         lin = mtype == "linear"
-        sin = mtype in ("breathing", "cardiac")
+        sin = mtype == "breathing"
         none_m = mtype == "none"
 
         self._set_slider_row_enabled(self._w_vel, self._lb__vel_val, lin)
@@ -400,7 +397,7 @@ class MainWindow(QMainWindow):
         elif lin:
             self.lbl_motion_hint.setText("Amplitude/Frequency are disabled in linear mode.")
         else:
-            self.lbl_motion_hint.setText("Velocity and direction are disabled in breathing/cardiac.")
+            self.lbl_motion_hint.setText("Velocity and direction are disabled in breathing.")
 
     def _set_slider_row_enabled(self, row_widget, label_widget, enabled):
         row_widget.setEnabled(enabled)

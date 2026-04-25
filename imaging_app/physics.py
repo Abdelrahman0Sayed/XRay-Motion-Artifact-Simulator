@@ -2,7 +2,6 @@
 
 import numpy as np
 from scipy import ndimage
-from scipy.signal import wiener
 from skimage.restoration import richardson_lucy
 from .constants import BODY_PARTS, VOXEL_SIZE
 
@@ -60,23 +59,6 @@ def _motion_weight_vector(nz: int, body_part: str, motion_type: str) -> np.ndarr
             elif ABD_LO <= z < THORAX_LO:
                 w[k] = np.exp(-DECAY_K * (THORAX_LO - z))
             # below ABD_LO and above THORAX_HI: w[k] = 0.0
-
-    elif motion_type == "cardiac":
-        # Gaussian falloff centred on the pericardial silhouette.
-        CARD_LO     =  0.05
-        CARD_HI     =  0.45
-        CARD_CTR    =  0.5 * (CARD_LO + CARD_HI)
-        CARD_SIGMA  =  0.14      # half-width of cardiac shadow in z-units
-
-        for k, z in enumerate(z_lin):
-            if CARD_LO <= z <= CARD_HI:
-                w[k] = 1.0
-            else:
-                w[k] = np.exp(-((z - CARD_CTR) ** 2) / (2.0 * CARD_SIGMA ** 2))
-
-        # Hard clamp: no cardiac motion below diaphragm or above thorax.
-        w[z_lin < -0.10] = 0.0
-        w[z_lin >  0.57] = 0.0
 
     else:
         # Linear motion or unknown: whole body moves uniformly.
@@ -204,7 +186,7 @@ def simulate_acquisition(volume, p):
 
     # Only use the mask when at least one slice has partial weight
     # (i.e., the mask is non-trivial and the motion is sinusoidal).
-    use_mask = (motion_type in ("breathing", "cardiac")) and (not np.all(w_z == 1.0))
+    use_mask = (motion_type == "breathing") and (not np.all(w_z == 1.0))
 
     accum = None
     dt    = total_time / n_steps
@@ -217,7 +199,7 @@ def simulate_acquisition(volume, p):
 
         if motion_type == "linear":
             d_cm = velocity * t
-        elif motion_type in ("breathing", "cardiac"):
+        elif motion_type == "breathing":
             d_cm = amplitude * np.sin(2.0 * np.pi * frequency * t)
         else:
             d_cm = 0.0
@@ -281,12 +263,6 @@ def apply_mitigation(image, p):
 
     if method == "None":
         return img
-    if method == "Median Filter":
-        return ndimage.median_filter(img, size=3).astype(np.float32)
-    if method == "Gaussian Smooth":
-        return ndimage.gaussian_filter(img, sigma=0.9).astype(np.float32)
-    if method == "Wiener Filter":
-        return np.clip(wiener(img, mysize=7), 0, 1).astype(np.float32)
     if method == "Unsharp Mask":
         blur = ndimage.gaussian_filter(img, sigma=1.5)
         return np.clip(img + 0.65 * (img - blur), 0, 1).astype(np.float32)
@@ -297,40 +273,62 @@ def apply_mitigation(image, p):
 
 
 def _rl_deconv(image, p, iters=15):
-    """Richardson-Lucy deconvolution using scikit-image and spatial masking."""
+    """Richardson-Lucy deconvolution with exact PSF matching and shift realignment."""
     if p.motion_type == "none":
         return image
 
-    # 1. Calculate physical blur extent
+    # 1. Calculate physical blur extent and build the correct kernel shape
     if p.motion_type == "linear":
         total_d = p.velocity * p.exposure_time
+        blur_pixels = max(3, int(total_d / VOXEL_SIZE))
+        # Linear motion creates a UNIFORM flat blur, not a curved window
+        window = np.ones(blur_pixels, dtype=np.float32)
     else:
         total_d = 2.0 * p.amplitude
+        blur_pixels = max(3, int(total_d / VOXEL_SIZE))
+        # Sinusoidal motion requires a curved window
+        window = np.hanning(blur_pixels + 2)[1:-1].astype(np.float32)
 
-    blur_pixels = max(3, int(total_d / VOXEL_SIZE))
-
-    # 2. Build a smooth 1D Kernel
-    window = np.hanning(blur_pixels + 2)[1:-1]
     window /= window.sum()
     
     if p.motion_axis == 2:
-        psf_k = window.reshape(1, -1).astype(np.float32)
+        psf_k = window.reshape(1, -1)
     else:
-        psf_k = window.reshape(-1, 1).astype(np.float32)
+        psf_k = window.reshape(-1, 1)
+
+    # 2. Pad the image matrix to prevent boundary ringing
+    pad_w = blur_pixels * 2
+    img_padded = np.pad(image, pad_width=pad_w, mode="edge")
 
     # 3. Built-in Richardson-Lucy Iterations
-    # clip=False prevents the function from clamping values before we apply our mask
-    u = richardson_lucy(image, psf_k, num_iter=iters, clip=False)
+    u_padded = richardson_lucy(img_padded, psf_k, num_iter=iters, clip=False)
 
-    # 4. Spatially-Aware Masking
+    # 4. Crop the padding back off
+    u = u_padded[pad_w:-pad_w, pad_w:-pad_w]
+
+# 5. Phase Shift Realignment (Crucial for accurate SSIM/NMSE)
+    # The forward simulation shifted the anatomy forward. The blur is centered at +blur_pixels/2.
+    # We must shift the deconvolved image backward to align with the unshifted static reference.
+    shift_amount = -blur_pixels / 2.0
+    shift_vec = [0.0, 0.0]
+    
+    # Map the 3D motion axis to the corresponding 2D projection axis
+    if p.motion_axis == 2:
+        shift_vec[1] = shift_amount  # 3D Z-axis maps to 2D axis 1
+    else:
+        shift_vec[0] = shift_amount  # 3D X-axis maps to 2D axis 0
+    
+    # Use order=1 (bilinear) for accurate sub-pixel shifting
+    u_aligned = ndimage.shift(u, shift_vec, mode="nearest", order=1)
+
+    # 6. Spatially-Aware Masking
     nz = image.shape[1]
     w_z = _motion_weight_vector(nz, p.body_part, p.motion_type)
     mask_2d = np.tile(w_z, (image.shape[0], 1)).astype(np.float32)
     
-    u_blended = u * mask_2d + image * (1.0 - mask_2d)
+    u_blended = u_aligned * mask_2d + image * (1.0 - mask_2d)
 
     return np.clip(u_blended, 0, 1).astype(np.float32)
-
 
 # ---------------------------------------------------------------------------
 # Quality metrics
