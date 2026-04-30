@@ -1,3 +1,5 @@
+***
+
 ## 🧮 Mathematical Details
 
 ### 1. X-Ray Projection (Beer-Lambert Law)
@@ -11,7 +13,7 @@ $$
 Where:
 
 - $I_0$ is the incident beam intensity (normalized to $1.0$)  
-- $\mu(x,y,z)$ is the local linear attenuation coefficient (in cm$^{-1}$)  
+- $\mu(x,y,z)$ is the local linear attenuation coefficient
 - $dl$ is the differential path length  
 
 Discrete form used in the software:
@@ -48,43 +50,7 @@ $$
 
 ---
 
-### 3. Detector Noise Models
-
-Let $I$ be the noise-free intensity ($0 \le I \le 1$), and $N_0$ be the incident photon flux.
-
-#### Poisson Noise
-
-$$
-k \sim \text{Poisson}(N_0 \cdot I)
-$$
-
-$$
-\hat{I} = \frac{k}{N_0}
-$$
-
-#### Gaussian Noise
-
-$$
-\hat{I} = I + \mathcal{N}(0, \sigma^2), \quad \sigma = \frac{1}{\sqrt{N_0}}
-$$
-
-#### Combined Model
-
-$$
-k \sim \text{Poisson}(N_0 \cdot I)
-$$
-
-$$
-r \sim \mathcal{N}(0, \sigma_{\text{read}}^2), \quad \sigma_{\text{read}} = 0.01 \cdot \sqrt{N_0}
-$$
-
-$$
-\hat{I} = \frac{k + r}{N_0}
-$$
-
----
-
-### 4. Artifact Mitigation Techniques
+### 3. Artifact Mitigation Techniques
 
 #### Unsharp Masking
 
@@ -104,28 +70,31 @@ Where:
 
 - $\tilde{h}$ is the flipped PSF  
 - $d$ is the observed blurry image  
-- $*$ denotes convolution  
+- denotes convolution  
 
 ---
 
-### 5. Evaluation Metrics
+### 4. Evaluation Metrics
 
-#### Signal-to-Noise Ratio (SNR)
+#### Normalized Mean Square Error (NMSE)
 
-$$
-\text{SNR (dB)} = 20 \cdot \log_{10}\left( \frac{\text{RMS}_{\text{signal}}}{\text{RMS}_{\text{noise}}} \right)
-$$
-
-#### Mean Squared Error (MSE)
+Calculates the error between the noisy image and the reference image, normalized by the energy of the reference image:
 
 $$
-\text{MSE} = \frac{1}{M} \sum \left( I(u,v) - K(u,v) \right)^2
+\text{NMSE} = \frac{|| I_{\text{ref}} - I_{\text{noisy}} ||^2}{|| I_{\text{ref}} ||^2} = \frac{\sum \left( I_{\text{ref}}(u,v) - I_{\text{noisy}}(u,v) \right)^2}{\sum I_{\text{ref}}(u,v)^2}
 $$
 
-#### Peak Signal-to-Noise Ratio (PSNR)
+#### Structural Similarity Index Measure (SSIM)
+
+Measures the perceptual similarity between two images utilizing local uniform windows (size $7 \times 7$):
 
 $$
-\text{PSNR (dB)} = 10 \cdot \log_{10}\left( \frac{MAX_I^2}{\text{MSE}} \right)
+\text{SSIM} = \frac{(2\mu_{\text{ref}}\mu_{\text{noisy}} + c_1)(2\sigma_{\text{ref},\text{noisy}} + c_2)}{(\mu_{\text{ref}}^2 + \mu_{\text{noisy}}^2 + c_1)(\sigma_{\text{ref}}^2 + \sigma_{\text{noisy}}^2 + c_2)}
 $$
 
-Where $MAX_I = 1.0$.
+Where:
+
+- $\mu$ represents the local mean of the respective image  
+- $\sigma^2$ represents the local variance  
+- $\sigma_{\text{ref},\text{noisy}}$ represents the local covariance between the reference and noisy images  
+- $c_1 = (0.01 \cdot L)^2$ and $c_2 = (0.03 \cdot L)^2$ act as stabilization constants, with the dynamic range $L = 1.0$
