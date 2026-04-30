@@ -432,7 +432,7 @@ class MainWindow(QMainWindow):
             frequency=self._freq_val,
             motion_axis=maxis,
             n_steps=self.sb_steps.value(),
-            noise_type="None",
+            noise_type="Poisson",
             mitigation=self.cb_mitig.currentText(),
         )
 
