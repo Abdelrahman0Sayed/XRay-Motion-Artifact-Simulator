@@ -2,6 +2,8 @@
 
 VOXEL_SIZE = 0.30
 
+# NIST XCOM database (2010) provide gold standard for mass attinuation coff. (mu/roh) 
+# Then to compute the mu is multiplied by roh from ICRU-44 (contains the denisties for the human body) 
 MU = dict(
     air=0.000,
     fat=0.160,
