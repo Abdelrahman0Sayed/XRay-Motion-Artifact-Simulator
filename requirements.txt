@@ -6,3 +6,4 @@ matplotlib>=3.5
 numpy>=1.21
 scipy>=1.7
 PyPubSub>=4.0
+scikit-image>=0.26.0
