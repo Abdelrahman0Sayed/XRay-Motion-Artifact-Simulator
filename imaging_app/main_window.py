@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .canvases import Phantom3DCanvas, ProjectionImageCanvas, motion_label
-from .constants import APP_STYLE, BODY_PARTS, PROJ_AXES
+from .constants import APP_STYLE, BODY_PARTS, PROJ_AXES, DEFAULT_SOD_CM, DEFAULT_SDD_CM, VOXEL_SIZE
 from .messaging import topics
 from .messaging.message_types import (
     SimulationDoneMessage,
@@ -56,6 +56,8 @@ class MainWindow(QMainWindow):
         self._vel_val = 1.50
         self._amp_val = 1.50
         self._freq_val = 0.30
+        self._sod_val = DEFAULT_SOD_CM
+        self._sdd_val = DEFAULT_SDD_CM
         self._last_static = None
         self._last_motion = None
         self._last_params = None
@@ -70,6 +72,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._on_motion_type_changed(self.cb_motion.currentText())
+        self._on_proj_model_changed(self.cb_proj_model.currentText())
         self._refresh_tube()
         self.statusBar().showMessage("Phantom ready. Adjust parameters and press SHOOT X-RAY")
 
@@ -305,6 +308,20 @@ class MainWindow(QMainWindow):
         self.cb_flux.setCurrentIndex(3)
         row.addWidget(self.cb_flux)
         lay.addLayout(row)
+
+        row_model = QHBoxLayout()
+        row_model.addWidget(QLabel("Projection Model:"))
+        self.cb_proj_model = QComboBox()
+        self.cb_proj_model.addItems(["Parallel", "Cone Beam"])
+        self.cb_proj_model.setCurrentText("Parallel")
+        self.cb_proj_model.currentTextChanged.connect(self._on_proj_model_changed)
+        row_model.addWidget(self.cb_proj_model)
+        lay.addLayout(row_model)
+
+        self._w_sod = self._slider_row("SOD:", 30.0, 120.0, DEFAULT_SOD_CM, 1, "cm", "_sod_val")
+        self._w_sdd = self._slider_row("SDD:", 60.0, 200.0, DEFAULT_SDD_CM, 1, "cm", "_sdd_val")
+        lay.addWidget(self._w_sod)
+        lay.addWidget(self._w_sdd)
         return g
 
     def _grp_motion(self):
@@ -399,6 +416,11 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_motion_hint.setText("Velocity and direction are disabled in breathing.")
 
+    def _on_proj_model_changed(self, model):
+        is_cone = model.lower().startswith("cone")
+        self._set_slider_row_enabled(self._w_sod, self._lb__sod_val, is_cone)
+        self._set_slider_row_enabled(self._w_sdd, self._lb__sdd_val, is_cone)
+
     def _set_slider_row_enabled(self, row_widget, label_widget, enabled):
         row_widget.setEnabled(enabled)
         row_widget.setToolTip("" if enabled else "Disabled for selected motion type")
@@ -421,9 +443,25 @@ class MainWindow(QMainWindow):
         maxis = 0 if "X" in self.cb_maxis.currentText() else 2
         if mtype != "linear":
             maxis = 2
+        proj_label = self.cb_proj.currentText()
+        if proj_label.startswith("AP"):
+            view_dir = "AP"
+        elif proj_label.startswith("PA"):
+            view_dir = "PA"
+        elif "Left -> Right" in proj_label:
+            view_dir = "LR"
+        else:
+            view_dir = "RL"
+        projection_type = "cone" if self.cb_proj_model.currentText().startswith("Cone") else "parallel"
         return SimulationParams(
             body_part=self.cb_part.currentText(),
             proj_axis=PROJ_AXES[self.cb_proj.currentText()],
+            projection_type=projection_type,
+            view_dir=view_dir,
+            sod=self._sod_val,
+            sdd=self._sdd_val,
+            voxel_size=VOXEL_SIZE,
+            phantom_shape=self.phantom.shape,
             exposure_time=self._exp_val,
             n_photons=self.cb_flux.currentData(),
             motion_type=mtype,
@@ -452,7 +490,7 @@ class MainWindow(QMainWindow):
         pub.sendMessage(topics.SIM_REQUESTED, message=params)
 
     def _on_sim_requested(self, message: SimulationParams):
-        self._sim_worker = SimulationWorker(self.phantom, message)
+        self._sim_worker = SimulationWorker(self.phantom, message, projection_type=message.projection_type)
         self._sim_worker.start()
 
     def _on_sim_progress(self, message: SimulationProgressMessage):

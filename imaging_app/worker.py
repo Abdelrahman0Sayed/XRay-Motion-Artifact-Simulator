@@ -19,17 +19,20 @@ from .physics import (
     compute_nmse,  
     compute_ssim,  
     project_parallel,
-    simulate_acquisition,
+    project_cone_beam,
+    simulate_parallel_acquisition,
+    simulate_cone_acquisition,
 )
 
 
 class SimulationWorker(threading.Thread):
     """Compute a simulation in a background thread and publish events."""
 
-    def __init__(self, phantom, params: SimulationParams):
+    def __init__(self, phantom, params: SimulationParams, projection_type="parallel"):
         super().__init__(daemon=True)
         self.phantom = phantom
         self.params = params
+        self.projection_type = projection_type
 
     def run(self):
         try:
@@ -39,10 +42,19 @@ class SimulationWorker(threading.Thread):
             vol = crop_phantom(self.phantom, p.body_part)
 
             pub.sendMessage(topics.SIM_PROGRESS, message=SimulationProgressMessage(20))
-            static_proj = project_parallel(vol, p.proj_axis)
+            projection_type = getattr(p, "projection_type", self.projection_type)
+            if projection_type == "parallel":
+                static_proj = project_parallel(vol, p.proj_axis)
+                motion_proj = simulate_parallel_acquisition(vol, p)
+                
+            elif projection_type == "cone":
+                pub.sendMessage(topics.SIM_PROGRESS, message=SimulationProgressMessage(30))
+                static_proj = project_cone_beam(vol, p)
+                motion_proj = simulate_cone_acquisition(vol, p)
+            else:
+                static_proj = project_parallel(vol, p.proj_axis)
+                motion_proj = simulate_parallel_acquisition(vol, p)
 
-            pub.sendMessage(topics.SIM_PROGRESS, message=SimulationProgressMessage(30))
-            motion_proj = simulate_acquisition(vol, p)
 
             pub.sendMessage(topics.SIM_PROGRESS, message=SimulationProgressMessage(72))
             static_noisy = add_noise(static_proj, p.noise_type, p.n_photons)

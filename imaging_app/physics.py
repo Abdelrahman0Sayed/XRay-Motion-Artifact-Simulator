@@ -3,7 +3,7 @@
 import numpy as np
 from scipy import ndimage
 from skimage.restoration import richardson_lucy
-from .constants import BODY_PARTS, VOXEL_SIZE
+from .constants import BODY_PARTS, VOXEL_SIZE, DEFAULT_SOD_CM, DEFAULT_SDD_CM
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +50,123 @@ def project_parallel(volume, axis):
     return np.exp(-line_integral).astype(np.float32)
 
 
+def _cone_slice_positions_cm(n_slices, proj_axis, body_part, voxel_size, phantom_shape=None):
+    if phantom_shape is not None:
+        full_n = phantom_shape[proj_axis]
+        full_span_cm = max(1, full_n - 1) * voxel_size
+    else:
+        full_span_cm = max(1, n_slices - 1) * voxel_size
+
+    if proj_axis == 2:
+        z_lo, z_hi = BODY_PARTS.get(body_part, (-1.0, 1.0))
+        z_norm = np.linspace(z_lo, z_hi, n_slices)
+        return z_norm * (full_span_cm / 2.0)
+
+    center = (n_slices - 1) / 2.0
+    return (np.arange(n_slices, dtype=np.float64) - center) * voxel_size
+
+
+def project_cone_beam(volume, p):
+    """
+    Cone-beam X-ray projection using a slice-by-slice scaling approximation.
+
+    Physics
+    -------
+    Accounts for beam divergence and magnification. Magnification M is defined as:
+        M(d) = SDD / d
+    where SDD is Source-to-Detector Distance, and 'd' is the distance from the 
+    X-ray point source to the specific anatomical slice.
+
+    Parameters
+    ----------
+    volume : ndarray, shape (nx, ny, nz)
+        3-D array of linear attenuation coefficients [cm⁻¹].
+    p : object
+        Parameter object containing:
+        - proj_axis: int (0=Lateral, 1=AP/PA, 2=Axial)
+        - view_dir: str ("AP", "PA", "LR", or "RL")
+        - sod: float (Source-to-Object-Center distance in cm)
+        - sdd: float (Source-to-Detector distance in cm)
+        - voxel_size: float (size of voxel in cm)
+        - body_part: str (used to align axial slices to phantom coordinates)
+        - phantom_shape: (nx, ny, nz) of the full phantom volume
+    """
+    proj_axis = p.proj_axis
+    direction = getattr(p, "view_dir", "AP").upper()
+    sod = getattr(p, "sod", DEFAULT_SOD_CM)
+    sdd = getattr(p, "sdd", DEFAULT_SDD_CM)
+    voxel_size = getattr(p, "voxel_size", VOXEL_SIZE)
+    phantom_shape = getattr(p, "phantom_shape", None)
+    body_part = getattr(p, "body_part", "Full Body")
+    
+    # Move projection axis to the front for easy iteration: shape becomes (depth, u, v)
+    vol_swapped = np.swapaxes(volume, 0, proj_axis)
+    n_slices = vol_swapped.shape[0]
+    
+    slice_pos_cm = _cone_slice_positions_cm(
+        n_slices,
+        proj_axis,
+        body_part,
+        voxel_size,
+        phantom_shape=phantom_shape,
+    )
+    reverse_dirs = {"PA", "RL"}
+    if direction in reverse_dirs:
+        slice_pos_cm = -slice_pos_cm
+
+    d_slices = sod + slice_pos_cm
+    d_slices = np.clip(d_slices, voxel_size, None)
+    
+    # Initialize accumulator for the line integral (matched to detector size, assuming 
+    # detector is large enough to catch the magnified center slice)
+    # For a robust simulator, you'd define a fixed detector grid, but here we 
+    # use the max magnified size to prevent cropping.
+    max_mag = sdd / np.min(d_slices)
+    base_shape = vol_swapped.shape[1:]
+    det_shape = (
+        max(1, int(np.ceil(base_shape[0] * max_mag))),
+        max(1, int(np.ceil(base_shape[1] * max_mag))),
+    )
+    
+    line_integral = np.zeros(det_shape, dtype=np.float64)
+    
+    for i in range(n_slices):
+        # Distance from source to this specific slice
+        d_slice = d_slices[i]
+        
+        # Calculate magnification factor for this slice
+        mag = sdd / d_slice
+        
+        # Extract slice and scale it (geometric magnification)
+        slc = vol_swapped[i, :, :]
+        scaled_slice = ndimage.zoom(slc, mag, order=1, mode='constant', cval=0.0)
+        
+        # Expand detector grid if the scaled slice exceeds current bounds
+        if (scaled_slice.shape[0] > det_shape[0]) or (scaled_slice.shape[1] > det_shape[1]):
+            new_shape = (
+                max(det_shape[0], scaled_slice.shape[0]),
+                max(det_shape[1], scaled_slice.shape[1]),
+            )
+            pad_u = (new_shape[0] - det_shape[0]) // 2
+            pad_v = (new_shape[1] - det_shape[1]) // 2
+            line_integral = np.pad(
+                line_integral,
+                ((pad_u, new_shape[0] - det_shape[0] - pad_u),
+                 (pad_v, new_shape[1] - det_shape[1] - pad_v)),
+                mode="constant",
+            )
+            det_shape = line_integral.shape
+
+        # Center the scaled slice onto the detector accumulator
+        offset_u = (det_shape[0] - scaled_slice.shape[0]) // 2
+        offset_v = (det_shape[1] - scaled_slice.shape[1]) // 2
+        
+        line_integral[
+            offset_u : offset_u + scaled_slice.shape[0],
+            offset_v : offset_v + scaled_slice.shape[1]
+        ] += scaled_slice * voxel_size * mag # Adjust line length through voxel by mag
+        
+    return np.exp(-line_integral).astype(np.float32)
 # ---------------------------------------------------------------------------
 # Anatomical motion weight mask
 # ---------------------------------------------------------------------------
@@ -168,7 +285,64 @@ def _shift_with_mask(volume: np.ndarray, d_vox: float,
 # Main acquisition simulation
 # ---------------------------------------------------------------------------
 
-def simulate_acquisition(volume, p):
+def simulate_cone_acquisition(volume, p):
+    """
+    Temporal integration of projections over the X-ray exposure window
+    using Stratified Monte Carlo sampling and Cone-Beam geometry.
+    """
+    motion_type = p.motion_type
+
+    if motion_type == "none":
+        return project_cone_beam(volume, p)
+
+    total_time  = p.exposure_time
+    n_steps     = p.n_steps
+    velocity    = p.velocity
+    amplitude   = p.amplitude
+    frequency   = p.frequency
+    motion_axis = p.motion_axis
+    body_part   = p.body_part
+    voxel_size = getattr(p, "voxel_size", VOXEL_SIZE)
+    voxel_size = getattr(p, "voxel_size", VOXEL_SIZE)
+
+    nz  = volume.shape[2]
+    w_z = _motion_weight_vector(nz, body_part, motion_type)
+    use_mask = (motion_type == "breathing") and (not np.all(w_z == 1.0))
+
+    accum = None
+    dt    = total_time / n_steps
+
+    for i in range(n_steps):
+        t = (i + np.random.uniform(0.0, 1.0)) * dt
+
+        if motion_type == "linear":
+            d_cm = velocity * t
+        elif motion_type == "breathing":
+            d_cm = amplitude * np.sin(2.0 * np.pi * frequency * t)
+        else:
+            d_cm = 0.0
+
+        d_vox = d_cm / voxel_size
+
+        if abs(d_vox) > 0.01:
+            if use_mask:
+                moved = _shift_with_mask(volume, d_vox, motion_axis, w_z)
+            else:
+                shift = [0.0, 0.0, 0.0]
+                shift[motion_axis] = d_vox
+                moved = ndimage.shift(volume, shift, mode="nearest", order=1)
+        else:
+            moved = volume
+
+        # Use the new cone-beam projection
+        proj = project_cone_beam(moved, p)
+        
+        # Accumulate (grid size is dynamic based on max mag, so it will match)
+        accum = proj if accum is None else accum + proj
+
+    return (accum / n_steps).astype(np.float32)
+
+def simulate_parallel_acquisition(volume, p):
     """
     Temporal integration of projections over the X-ray exposure window.
 
@@ -213,6 +387,7 @@ def simulate_acquisition(volume, p):
     proj_axis   = p.proj_axis
     motion_axis = p.motion_axis
     body_part   = p.body_part
+    voxel_size = getattr(p, "voxel_size", VOXEL_SIZE)
 
     # Build the anatomical z-weight mask (computed once, outside the loop).
     nz  = volume.shape[2]
@@ -238,7 +413,7 @@ def simulate_acquisition(volume, p):
         else:
             d_cm = 0.0
 
-        d_vox = d_cm / VOXEL_SIZE
+        d_vox = d_cm / voxel_size
 
         if abs(d_vox) > 0.01:
             if use_mask:

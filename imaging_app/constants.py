@@ -1,6 +1,8 @@
 """Application constants and styling."""
 
 VOXEL_SIZE = 0.30
+DEFAULT_SOD_CM = 60.0
+DEFAULT_SDD_CM = 120.0
 
 MU = dict(
     air=0.000,
