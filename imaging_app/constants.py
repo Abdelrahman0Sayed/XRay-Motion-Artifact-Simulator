@@ -1,6 +1,8 @@
 """Application constants and styling."""
 
 VOXEL_SIZE = 0.30
+DEFAULT_SOD_CM = 60.0
+DEFAULT_SDD_CM = 120.0
 
 # NIST XCOM database (2010) provide gold standard for mass attinuation coff. (mu/roh) 
 # Then to compute the mu is multiplied by roh from ICRU-44 (contains the denisties for the human body) 

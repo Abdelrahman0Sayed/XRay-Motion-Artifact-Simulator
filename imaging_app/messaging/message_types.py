@@ -1,7 +1,7 @@
 """Typed message payloads for pubsub communication."""
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Tuple
 
 import numpy as np
 
@@ -10,6 +10,12 @@ import numpy as np
 class SimulationParams:
     body_part: str
     proj_axis: int
+    projection_type: str
+    view_dir: str
+    sod: float
+    sdd: float
+    voxel_size: float
+    phantom_shape: Tuple[int, int, int]
     exposure_time: float
     n_photons: int
     motion_type: str
