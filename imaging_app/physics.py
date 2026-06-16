@@ -11,7 +11,41 @@ from .constants import BODY_PARTS, VOXEL_SIZE
 # ---------------------------------------------------------------------------
 
 def project_parallel(volume, axis):
-    """Parallel-beam projection using Beer-Lambert law: I/I0 = exp(-sum(mu*dx))."""
+    """
+    Parallel-beam X-ray projection using Beer-Lambert law.
+
+    Computes line-integral attenuation along the specified axis and applies
+    the exponential attenuation model: I = I0 * exp(-∫μ(s)ds), where the
+    integral is the cumulative linear attenuation coefficient along the ray.
+
+    Physics
+    -------
+    This implements the standard Beer-Lambert law for X-ray transmission through
+    matter. The volume contains linear attenuation coefficients (μ), typically
+    in units of cm⁻¹. The line integral ∫μ(s)ds represents the optical depth;
+    exponentiating the negative line integral gives the transmission fraction
+    (intensity relative to incident intensity I0).
+
+    Parameters
+    ----------
+    volume : ndarray, shape (nx, ny, nz)
+        3-D array of linear attenuation coefficients [cm⁻¹]. Must be non-negative.
+    axis : int
+        Projection axis (0=Lateral, 1=AP/PA). Defines the ray direction.
+
+    Returns
+    -------
+    proj : ndarray, shape (nx, ny) or permutation thereof
+        2-D transmission image with values in [0, 1], where 0 = fully attenuated,
+        1 = no attenuation. Output dtype is float32.
+
+    Notes
+    -----
+    - The line integral is computed by summing along the specified axis and
+      multiplying by VOXEL_SIZE (voxel dimension in cm) to convert from
+      discrete sum to physical distance integral.
+    - Output values saturating at 0 indicate very high attenuation depth.
+    """
     line_integral = np.sum(volume, axis=axis, dtype=np.float64) * VOXEL_SIZE
     return np.exp(-line_integral).astype(np.float32)
 
